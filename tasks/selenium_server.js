@@ -59,6 +59,10 @@ module.exports = function (grunt) {
 
     // Start downloading and showing progress.
     request(options.downloadUrl)
+        .on('error', function(error){
+          grunt.log.error("Error happened while requesting resource", error);
+          cb(null, error);
+        })
         .on('response', function (res) {
           grunt.log.ok("We have a response");
           if (res.statusCode < 200 || res.statusCode >= 400) {
