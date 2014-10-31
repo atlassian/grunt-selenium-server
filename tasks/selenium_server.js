@@ -43,12 +43,16 @@ module.exports = function (grunt) {
 
     grunt.log.ok('Write stream is opened', !!writeStream);
 
+    writeStream.on('pipe', function(){
+      grunt.log.ok('Pipe started!');
+    });
+
     writeStream.on('close', function(){
       grunt.log.ok("Write stream is closed now");
       cb(destination, null);
     });
 
-    writeStream.on('write', function(chunk){
+    writeStream.on('write', function(){
       grunt.log.ok("Chunk");
     });
 
@@ -58,46 +62,41 @@ module.exports = function (grunt) {
     });
 
     // Start downloading and showing progress.
-    try {
       request(options.downloadUrl)
-          .on('error', function (error) {
-            grunt.log.error("Error happened while requesting resource", error);
-            cb(null, error);
-          })
-          .on('response', function (res) {
-            grunt.log.ok("We have a response");
-            if (res.statusCode < 200 || res.statusCode >= 400) {
-              grunt.fail.fatal(options.downloadUrl + " returns " + res.statusCode);
-            }
-            // Full length of file.
-            var len = parseInt(res.headers['content-length'], 10);
-            grunt.log.ok("Response length is", len, "bytes");
-
-            // Super nifty progress bar.
-            var bar = new ProgressBar(' downloading [:bar] :percent :etas', {
-              complete: '=',
-              incomplete: ' ',
-              width: 20,
-              total: len
-            });
-
-            // Write new data to file.
-            res.on('data', function (chunk) {
-              bar.tick(chunk.length);
-            });
-
-            // Download error.
-            res.on('error', function (err) {
-              grunt.log.error("Something happened with response");
-              cb(null, err);
-            });
-          })
+//          .on('error', function (error) {
+//            grunt.log.error("Error happened while requesting resource", error);
+//            cb(null, error);
+//          })
+//          .on('response', function (res) {
+//            grunt.log.ok("We have a response");
+//            if (res.statusCode < 200 || res.statusCode >= 400) {
+//              grunt.fail.fatal(options.downloadUrl + " returns " + res.statusCode);
+//            }
+//            // Full length of file.
+//            var len = parseInt(res.headers['content-length'], 10);
+//            grunt.log.ok("Response length is", len, "bytes");
+//
+//            // Super nifty progress bar.
+//            var bar = new ProgressBar(' downloading [:bar] :percent :etas', {
+//              complete: '=',
+//              incomplete: ' ',
+//              width: 20,
+//              total: len
+//            });
+//
+//            // Write new data to file.
+//            res.on('data', function (chunk) {
+//              bar.tick(chunk.length);
+//            });
+//
+//            // Download error.
+//            res.on('error', function (err) {
+//              grunt.log.error("Something happened with response");
+//              cb(null, err);
+//            });
+//          })
           .pipe(writeStream);
       grunt.log.ok("Request done without an exception");
-    } catch (error) {
-      grunt.log.error("There was an error making a request", error);
-      cb(null, error);
-    }
   }
 
   /**
