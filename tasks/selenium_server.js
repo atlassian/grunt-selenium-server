@@ -1,12 +1,11 @@
-
 module.exports = function (grunt) {
 
   var fs = require('fs');
   var os = require('os');
+  var util = require('util');
   var path = require('path');
   var url = require('url');
   var request = require('request');
-  var ProgressBar = require('progress');
 
   /**
    * References running server processes.
@@ -15,71 +14,96 @@ module.exports = function (grunt) {
    */
   var childProcesses = {};
 
-  /**
-   * Download the Selenium Server jar file.
-   *
-   * @param  {Object}   options Grunt task options.
-   * @param  {Function} cb
-   */
-  function downloadJar (options, cb) {
+  grunt.registerMultiTask('download-selenium-server', 'Downloads selenium server', function () {
+    var done = this.async();
+
+    var options = this.options({
+      downloadUrl: 'https://selenium-release.storage.googleapis.com/2.42/selenium-server-standalone-2.42.2.jar',
+      downloadLocation: os.tmpdir()
+    });
+    grunt.verbose.writeflags(options, 'Options');
+
     // Where to save jar to.
     var destination = path.join(options.downloadLocation, path.basename(options.downloadUrl));
+    grunt.config.set('start-selenium-server.options.standaloneSeleniumServerLocation', destination);
+    grunt.log.ok("File location", destination);
 
     // If it's already there don't download it.
-    if (fs.existsSync(destination)) {
-      return cb(destination, null);
+    try {
+      var exists = fs.existsSync(destination);
+    } catch (err) {
+      return done(err);
     }
 
-    grunt.log.ok('Saving jar to: ' + destination);
+    if (exists) {
+      var stat = fs.statSync(destination);
+      if (stat.size > 0) {
+        var override = options.override || false;
+        if (!override) {
+          grunt.log.ok("File is there with size", stat.size);
+          return done();
+        } else {
+          grunt.log.ok("File is there with size", stat.size);
+          grunt.log.ok("But override requested, so removing and downloading.");
+          try {
+            fs.unlinkSync(destination);
+            grunt.log.ok("File removed");
+          } catch (err) {
+            return done(err);
+          }
+        }
+      } else {
+        grunt.log.ok("File is there but it's zero size. Keeping with downloading");
+      }
+    }
 
-    var writeStream = fs.createWriteStream(destination);
+    grunt.log.ok('Starting downloading');
+
+    try {
+      var writeStream = fs.createWriteStream(destination);
+    } catch (err) {
+      return done(err);
+    }
+
+    writeStream.on('close', function () {
+      grunt.log.ok("Saving is complete");
+      done();
+    });
+
+    writeStream.on('error', function (error) {
+      grunt.log.error("There was an error writing to a file", error);
+      done(error);
+    });
 
     // Start downloading and showing progress.
-    request(options.downloadUrl).on('response', function (res) {
-      if(res.statusCode >= 200 && res.statusCode < 300) {
-          grunt.fail.fatal(options.downloadUrl + " returns " + res.statusCode);
-      }
-      // Full length of file.
-      var len = parseInt(res.headers['content-length'], 10);
-
-      // Super nifty progress bar.
-      var bar = new ProgressBar(' downloading [:bar] :percent :etas', {
-        complete: '=',
-        incomplete: ' ',
-        width: 20,
-        total: len
-      });
-
-      // Write new data to file.
-      res.on('data', function (chunk) {
-        writeStream.write(chunk);
-        bar.tick(chunk.length);
-      });
-
-      // Close file and holla back.
-      res.on('end', function () {
-        writeStream.end();
-        grunt.log.ok('done.');
-        cb(destination, null);
-      });
-
-      // Download error.
-      res.on('error', function (err) {
-        cb(null, err);
-      });
-    });
-  }
+    request(options.downloadUrl)
+        .on("error", function (err) {
+          grunt.log.error("There was a problem with requesting a resource", err);
+          done(err);
+        })
+        .pipe(writeStream);
+  });
 
   /**
-   * Start a selenium server.
-   *
-   * @param  {String}   target  Grunt task target.
-   * @param  {String}   jar     Full path to server jar.
-   * @param  {Object}   options Grunt task options.
-   * @param  {Function} cb
+   * Start a Selenium server.
    */
-  function startServer (target, jar, options, cb) {
-    var args = ['-jar', jar];
+  grunt.registerMultiTask('start-selenium-server', 'Start Selenium server.', function () {
+    var done = this.async();
+
+    var target = this.target;
+
+    // Set default options.
+    var options = this.options({
+      serverOptions: {},
+      systemProperties: {},
+      standaloneSeleniumServerLocation: null
+    });
+
+    if(!options.standaloneSeleniumServerLocation){
+      done(new Error("standaloneSeleniumServerLocation option is not defined"));
+    }
+
+    var args = ['-jar', options.standaloneSeleniumServerLocation];
 
     // Add additional options to command.
     Object.keys(options.serverOptions).forEach(function (key) {
@@ -91,84 +115,55 @@ module.exports = function (grunt) {
       args.push('-D' + key + '=' + options.systemProperties[key]);
     });
 
+    grunt.verbose.writeflags(options, 'options');
+    grunt.verbose.writeflags(args, 'java arguments');
+
     grunt.log.ok('Starting Selenium server...');
 
     // Spawn server process.
-    grunt.log.ok('Using (roughly) command: java ' + args.join(' '));
-    var spawn = require('child_process').spawn;
-    childProcesses[target] = spawn('java', args);
+    grunt.log.ok('Using command: java ' + args.join(' '));
 
+    childProcesses[target] = grunt.util.spawn({
+      cmd: 'java',
+      args: args
+    });
     grunt.event.emit('selenium.start', target, childProcesses[target]);
 
     var pid = childProcesses[target].pid;
-    grunt.log.ok('Boom, got it. pid is ' + pid + ' in case you give a shit.');
+    grunt.log.ok('Selenium server pid is ' + pid);
 
     var complete = false;
 
-    // Reading stream see if selenium has started
-    function hasSeleniumStarted(data) {
-      if (data.toString().match(/Started SocketListener on .+:\d+/)) {
+    var processOutput = function (data) {
+      var dataStr = data.toString();
+      if (!complete) {
+        grunt.log.ok(dataStr);
+      }
+
+      if (dataStr.match(/Started SocketListener on .+:\d+/)) {
         if (complete) return;
         grunt.log.ok('Selenium server SocketListener started.');
 
-        // Wait a tiny bit more time just because it's java and I'm worried.
-        setTimeout(function(){
-          complete = true;
-          cb(null);
-        }, 2000);
+        complete = true;
+        done();
+      } else if (dataStr.match(/Selenium is already running on port \d+/)) {
+        grunt.log.error("Selenium is already running");
+        done(new Error("Selenium is already running"));
       }
-    }
+    };
 
-    // < 2.43.0 outputs to stdout
-    childProcesses[target].stdout.on('data', hasSeleniumStarted);
-    // >= 2.43.0 outputs to stdout
-    childProcesses[target].stderr.on('data', hasSeleniumStarted);
+    childProcesses[target].stdout.on('data', processOutput);
+    childProcesses[target].stderr.on('data', processOutput);
 
     // Timeout case
-    setTimeout(function() {
+    setTimeout(function () {
       if (!complete) {
         complete = true;
         // Try to clean up better after ourselves
         childProcesses[target].kill('SIGTERM');
-        cb(new Error('Timeout waiting for selenium to start.  Check if an instance of selenium is already running.'));
+        done(new Error('Timeout waiting for selenium to start.  Check if an instance of selenium is already running.'));
       }
     }, 30000);
-  }
-
-  /**
-   * Start a Selenium server.
-   */
-  grunt.registerMultiTask('start-selenium-server', 'Start Selenium server.', function () {
-    var done = this.async();
-    var target = this.target;
-
-    // Set default options.
-    var options = this.options({
-      downloadUrl: 'https://selenium-release.storage.googleapis.com/2.42/selenium-server-standalone-2.42.2.jar',
-      downloadLocation: os.tmpdir(),
-      serverOptions: {},
-      systemProperties: {}
-    });
-
-    grunt.verbose.writeflags(options, 'Options');
-
-    // Download jar file. Doesn't do anything if the file's already been downloaded.
-    downloadJar(options, function (jar, err) {
-      if (err) {
-        grunt.log.error(err);
-        return done(false);
-      }
-
-      // Start the selenium server in a child process.
-      startServer(target, jar, options, function (err) {
-        if (err) {
-          grunt.log.error(err);
-          return done(false);
-        }
-
-        done(true);
-      });
-    });
   });
 
   /**
