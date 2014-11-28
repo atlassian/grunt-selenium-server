@@ -2,15 +2,32 @@ module.exports = function (grunt) {
 
   grunt.registerMultiTask('start-selenium-server', 'Start Selenium server.', function () {
     var done = this.async();
-
     var target = this.target;
+    var childProcess;
 
     // Set default options.
     var options = this.options({
       serverOptions: {},
       systemProperties: {},
-      standaloneSeleniumServerLocation: null
+      standaloneSeleniumServerLocation: null,
+      killSeleniumOnFail: true
     });
+
+    var ready = function () {
+      if (options.killSeleniumOnFail) {
+        //Hookup to grunt fail in order to kill
+        grunt.util.hooker.hook(grunt.fail, function () {
+          try {
+            childProcess.kill('SIGTERM');
+          }
+          catch (e) {
+            grunt.log.warn('Unable to stop selenium target: ' + target);
+          }
+        });
+      }
+      done();
+    };
+
 
     if (!options.standaloneSeleniumServerLocation) {
       done(new Error("standaloneSeleniumServerLocation option is not defined"));
@@ -36,7 +53,7 @@ module.exports = function (grunt) {
     // Spawn server process.
     grunt.log.ok('Using command: java ' + args.join(' '));
 
-    var childProcess = grunt.util.spawn({
+    childProcess = grunt.util.spawn({
       cmd: 'java',
       args: args
     });
@@ -59,7 +76,7 @@ module.exports = function (grunt) {
         grunt.log.ok('Selenium server SocketListener started.');
 
         complete = true;
-        done();
+        ready();
       } else if (dataStr.match(/Selenium is already running on port \d+/)) {
         grunt.log.error("Selenium is already running");
         done(new Error("Selenium is already running"));
